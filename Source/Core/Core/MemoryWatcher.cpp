@@ -2,37 +2,58 @@
 // Licensed under GPLv2+
 // Refer to the license.txt file included.
 
-#include <fstream>
-#include <iostream>
-#include <sstream>
-#include <unistd.h>
+#include <memory>
+
+#include "MemoryWatcher.h"
+
+#ifdef _WIN32
+#include "MemoryWatcherWin.h"
+#elif defined(__unix__) || defined(__APPLE__)
+#include "MemoryWatcherUnix.h"
+#endif
+
+#ifdef _WIN32
+static std::unique_ptr<MemoryWatcherWin> instance;
+#elif defined(__unix__) || defined(__APPLE__)
+static std::unique_ptr<MemoryWatcherUnix> instance;
+#endif
 
 #include "Common/FileUtil.h"
+#include "Common/Logging/Log.h"
 #include "Common/Thread.h"
-#include "Core/MemoryWatcher.h"
 #include "Core/HW/Memmap.h"
-
-// We don't want to kill the cpu, so sleep for this long after polling.
-static const int SLEEP_DURATION = 2; // ms
 
 MemoryWatcher::MemoryWatcher()
 {
-	if (!LoadAddresses(File::GetUserPath(F_MEMORYWATCHERLOCATIONS_IDX)))
-		return;
-	if (!OpenSocket(File::GetUserPath(F_MEMORYWATCHERSOCKET_IDX)))
-		return;
-	m_running = true;
-	m_watcher_thread = std::thread(&MemoryWatcher::WatcherThread, this);
+#if defined(__unix__) || defined(__APPLE__)
+	instance = std::make_unique<MemoryWatcherUnix>();
+#elif defined(_WIN32)
+	instance = std::make_unique<MemoryWatcherWin>();
+#endif
+
+	instance->Create();
 }
 
 MemoryWatcher::~MemoryWatcher()
 {
-	if (!m_running)
-		return;
+#if defined(_WIN32) || defined(__unix__)
+	instance->Destroy();
+#endif
+}
 
-	m_running = false;
-	m_watcher_thread.join();
-	close(m_fd);
+u32 MemoryWatcher::ChasePointer(const std::string& line)
+{
+	u32 value = 0;
+	for (u32 offset : m_addresses[line])
+		value = Memory::Read_U32(value + offset);
+	return value;
+}
+
+std::string MemoryWatcher::ComposeMessage(const std::string& line, u32 value)
+{
+	std::stringstream message_stream;
+	message_stream << line << '\n' << std::hex << value;
+	return message_stream.str();
 }
 
 bool MemoryWatcher::LoadAddresses(const std::string& path)
@@ -58,57 +79,4 @@ void MemoryWatcher::ParseLine(const std::string& line)
 	u32 offset;
 	while (offsets >> offset)
 		m_addresses[line].push_back(offset);
-}
-
-bool MemoryWatcher::OpenSocket(const std::string& path)
-{
-	memset(&m_addr, 0, sizeof(m_addr));
-	m_addr.sun_family = AF_UNIX;
-	strncpy(m_addr.sun_path, path.c_str(), sizeof(m_addr.sun_path) - 1);
-
-	m_fd = socket(AF_UNIX, SOCK_DGRAM, 0);
-	return m_fd >= 0;
-}
-
-u32 MemoryWatcher::ChasePointer(const std::string& line)
-{
-	u32 value = 0;
-	for (u32 offset : m_addresses[line])
-		value = Memory::Read_U32(value + offset);
-	return value;
-}
-
-std::string MemoryWatcher::ComposeMessage(const std::string& line, u32 value)
-{
-	std::stringstream message_stream;
-	message_stream << line << '\n' << std::hex << value;
-	return message_stream.str();
-}
-
-void MemoryWatcher::WatcherThread()
-{
-	while (m_running)
-	{
-		for (auto& entry : m_values)
-		{
-			std::string address = entry.first;
-			u32& current_value = entry.second;
-
-			u32 new_value = ChasePointer(address);
-			if (new_value != current_value)
-			{
-				// Update the value
-				current_value = new_value;
-				std::string message = ComposeMessage(address, new_value);
-				sendto(
-					m_fd,
-					message.c_str(),
-					message.size() + 1,
-					0,
-					reinterpret_cast<sockaddr*>(&m_addr),
-					sizeof(m_addr));
-			}
-		}
-		Common::SleepCurrentThread(SLEEP_DURATION);
-	}
 }

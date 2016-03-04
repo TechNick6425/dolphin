@@ -8,8 +8,6 @@
 #include <map>
 #include <thread>
 #include <vector>
-#include <sys/socket.h>
-#include <sys/un.h>
 
 // MemoryWatcher reads a file containing in-game memory addresses and outputs
 // changes to those memory addresses to a unix domain socket as the game runs.
@@ -19,27 +17,26 @@
 // "ABCD EF" will watch the address at (*0xABCD) + 0xEF.
 // The output to the socket is two lines. The first is the address from the
 // input file, and the second is the new value in hex.
-class MemoryWatcher final
+class MemoryWatcher
 {
 public:
 	MemoryWatcher();
 	~MemoryWatcher();
+	virtual void Create();
+	virtual void Destroy();
 
-private:
+protected:
 	bool LoadAddresses(const std::string& path);
-	bool OpenSocket(const std::string& path);
+	virtual bool OpenSocket(const std::string& path);
 
 	void ParseLine(const std::string& line);
 	u32 ChasePointer(const std::string& line);
 	std::string ComposeMessage(const std::string& line, u32 value);
 
-	void WatcherThread();
+	virtual void WatcherThread();
 
 	std::thread m_watcher_thread;
 	std::atomic_bool m_running{false};
-
-	int m_fd;
-	sockaddr_un m_addr;
 
 	// Address as stored in the file -> list of offsets to follow
 	std::map<std::string, std::vector<u32>> m_addresses;

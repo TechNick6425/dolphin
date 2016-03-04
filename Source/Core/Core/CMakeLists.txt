@@ -269,12 +269,16 @@ if(OPROFILE_FOUND)
 	set(LIBS ${LIBS} ${OPROFILE_LIBRARIES})
 endif(OPROFILE_FOUND)
 
-if(GDBSTUB)
+if(x)
 	set(SRCS ${SRCS} PowerPC/GDBStub.cpp)
 endif(GDBSTUB)
 
-if(UNIX)
-	set(SRCS ${SRCS} MemoryWatcher.cpp)
+if(UNIX OR APPLE)
+	set(SRCS ${SRCS} MemoryWatcher.cpp MemoryWatcherUnix.cpp)
 endif(UNIX)
+
+if(WIN32)
+	set(SRCS ${SRCS} MemoryWatcher.cpp MemoryWatcherWin.cpp)
+endif(WIN32)
 
 add_dolphin_library(core "${SRCS}" "${LIBS}")
